@@ -6,7 +6,6 @@ import requests
 import threading
 import time
 from googleapiclient.discovery import build
-from collections import deque
 import redis
 
 app = Flask(__name__)
@@ -18,7 +17,7 @@ logger = logging.getLogger(__name__)
 # YouTube RTMP URL
 YOUTUBE_URL = 'rtmp://a.rtmp.youtube.com/live2/fsw6-csp7-495j-vfm2-04ag'  # Replace with your YouTube RTMP URL
 api_key = 'AIzaSyBAnFtogm4M7MhjqeubJpbAAWtUcVho6Q8'
-broadcast_id = 'GwI0dayAyOQ'
+broadcast_id = 'niS4UhEMEA8'
 
 # Path to the token file
 token_file_path = 'token.txt'
@@ -32,9 +31,6 @@ is_live_stream_active = False
 # Build YouTube service
 youtube = build('youtube', 'v3', developerKey=api_key)
 
-# Command queue
-command_queue = deque()
-
 # Redis configuration
 redis_host = 'localhost'  # Replace with your Redis host if different
 redis_port = 6379  # Replace with your Redis port if different
@@ -45,6 +41,9 @@ redis_client = redis.StrictRedis(host=redis_host, port=redis_port, db=redis_db, 
 
 # Redis key for processed message IDs
 processed_message_ids_key = 'processed_message_ids'
+
+# Redis key for command queue
+command_queue_key = 'command_queue'
 
 def load_secret_token():
     if not os.path.exists(token_file_path):
@@ -142,8 +141,9 @@ def get_command():
     # Fetch new messages from YouTube
     fetch_live_chat_messages()
 
-    if command_queue:
-        command = command_queue.popleft()  # Pop the command from the queue
+    # Retrieve the command from Redis
+    command = redis_client.lpop(command_queue_key)
+    if command:
         return jsonify({"command": command}), 200
     else:
         return jsonify({"message": "No commands available"}), 204
@@ -194,8 +194,6 @@ def get_live_chat_id(api_key, broadcast_id):
         return None
 
 def fetch_live_chat_messages():
-    global command_queue
-
     try:
         # Fetch the live chat ID
         live_chat_id = get_live_chat_id(api_key, broadcast_id)
@@ -206,18 +204,21 @@ def fetch_live_chat_messages():
         # Fetch live chat messages
         response = youtube.liveChatMessages().list(
             liveChatId=live_chat_id,
-            part='snippet',
+            part='snippet,authorDetails',
             maxResults=200
         ).execute()
 
         for item in response['items']:
             message_id = item['id']  # Unique ID for each message
             message_text = item['snippet']['displayMessage'].lower()
+            username = item['authorDetails']['displayName']  # Extract the username
 
             # Process the message if it contains a command and hasn't been processed yet
             if message_id not in redis_client.smembers(processed_message_ids_key) and any(
                     command in message_text for command in ['forward', 'left', 'right', 'back']):
-                command_queue.append(message_text)
+                # Combine the username and message text
+                command_data = f"{username}: {message_text}"
+                redis_client.rpush(command_queue_key, command_data)  # Push command to Redis queue
                 redis_client.sadd(processed_message_ids_key, message_id)
 
     except Exception as e:
