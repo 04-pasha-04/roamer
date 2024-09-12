@@ -5,6 +5,7 @@ import os
 import requests
 import threading
 import time
+import json
 from googleapiclient.discovery import build
 import redis
 
@@ -14,13 +15,20 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# YouTube RTMP URL
-YOUTUBE_URL = 'rtmp://a.rtmp.youtube.com/live2/fsw6-csp7-495j-vfm2-04ag'  # Replace with your YouTube RTMP URL
-api_key = 'AIzaSyBAnFtogm4M7MhjqeubJpbAAWtUcVho6Q8'
-broadcast_id = 'niS4UhEMEA8'
+# Load configuration from JSON file
+config_file_path = 'config.json'
+with open(config_file_path, 'r') as config_file:
+    config = json.load(config_file)
 
-# Path to the token file
-token_file_path = 'token.txt'
+# Extract configuration
+YOUTUBE_URL = config['youtube']['rtmp_url']
+api_key = config['youtube']['api_key']
+broadcast_id = config['youtube']['broadcast_id']
+
+redis_host = config['redis']['host']
+redis_port = config['redis']['port']
+redis_db = config['redis']['db']
+token = config['token']
 
 # FFmpeg processes
 current_ffmpeg_process = None
@@ -30,11 +38,6 @@ is_live_stream_active = False
 
 # Build YouTube service
 youtube = build('youtube', 'v3', developerKey=api_key)
-
-# Redis configuration
-redis_host = 'localhost'  # Replace with your Redis host if different
-redis_port = 6379  # Replace with your Redis port if different
-redis_db = 0  # Redis database index
 
 # Initialize Redis connection
 redis_client = redis.StrictRedis(host=redis_host, port=redis_port, db=redis_db, decode_responses=True)
@@ -46,11 +49,10 @@ processed_message_ids_key = 'processed_message_ids'
 command_queue_key = 'command_queue'
 
 def load_secret_token():
-    if not os.path.exists(token_file_path):
-        raise FileNotFoundError(f"Token file not found at {token_file_path}. Please generate a token first.")
-
-    with open(token_file_path, 'r') as token_file:
-        return token_file.read().strip()
+    if not token:
+        raise FileNotFoundError(f"Token not found. Please generate a token and place it in the config.json file first.")
+    
+    return token
 
 def start_main_ffmpeg_stream():
     global current_ffmpeg_process, is_live_stream_active
@@ -139,7 +141,8 @@ def live():
 @app.route('/get_command', methods=['GET'])
 def get_command():
     # Fetch new messages from YouTube
-    fetch_live_chat_messages()
+    if redis_client.llen(command_queue_key) == 0:
+        fetch_live_chat_messages()
 
     # Retrieve the command from Redis
     command = redis_client.lpop(command_queue_key)
@@ -217,7 +220,7 @@ def fetch_live_chat_messages():
             if message_id not in redis_client.smembers(processed_message_ids_key) and any(
                     command in message_text for command in ['forward', 'left', 'right', 'back']):
                 # Combine the username and message text
-                command_data = f"{username}: {message_text}"
+                command_data = f"{message_text}"
                 redis_client.rpush(command_queue_key, command_data)  # Push command to Redis queue
                 redis_client.sadd(processed_message_ids_key, message_id)
 
