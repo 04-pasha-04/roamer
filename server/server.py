@@ -1,7 +1,6 @@
 from flask import Flask, Response, request, abort, jsonify
 import subprocess
 import logging
-import os
 import requests
 import threading
 import time
@@ -218,7 +217,7 @@ def fetch_live_chat_messages():
 
             # Process the message if it contains a command and hasn't been processed yet
             if message_id not in redis_client.smembers(processed_message_ids_key) and any(
-                    command in message_text for command in ['forward', 'left', 'right', 'back']):
+                    command in message_text for command in ['forward', 'left', 'right', 'backward']):
                 # Combine the username and message text
                 command_data = f"{message_text}"
                 redis_client.rpush(command_queue_key, command_data)  # Push command to Redis queue
